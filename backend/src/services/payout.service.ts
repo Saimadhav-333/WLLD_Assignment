@@ -1,7 +1,11 @@
+
 import mongoose from "mongoose";
 import Submission from "../models/Submission";
 import Campaign from "../models/Campaign";
 import { ApiError } from "../utils/ApiError";
+
+// Import used by the TESTING / REUSABLE CALCULATION approach
+import { calculatePayout } from "../utils/payout.utils";
 
 interface UpdateViewsInput {
   submissionId: string;
@@ -46,7 +50,17 @@ export async function updateSubmissionViews({
         throw new ApiError(404, "Campaign not found");
       }
 
-      // Determine the highest milestone reached.
+      const remainingBudget = Math.max(
+        0,
+        campaign.totalBudget - campaign.spentBudget
+      );
+
+      // =========================================================
+      // API LOGIC - OPTION 1: ORIGINAL PAYOUT CALCULATION
+      // Keep this block enabled OR use Option 2 below, not both.
+      // =========================================================
+
+      /*
       const reachedMilestones = campaign.milestones.filter(
         (milestone) => views >= milestone.views
       );
@@ -56,12 +70,6 @@ export async function updateSubmissionViews({
           ? reachedMilestones[reachedMilestones.length - 1].payout
           : 0;
 
-      // Do not allocate the same payout twice.
-      const remainingBudget = Math.max(
-        0,
-        campaign.totalBudget - campaign.spentBudget
-      );
-
       const additionalPayout = Math.min(
         Math.max(0, targetPayout - submission.payout),
         remainingBudget
@@ -69,7 +77,42 @@ export async function updateSubmissionViews({
 
       const newPayout = submission.payout + additionalPayout;
 
-      // The campaign budget can only increase by the newly allocated amount.
+      let payoutStatus: "pending" | "paid" | "unfunded";
+
+      if (targetPayout === 0) {
+        payoutStatus = "pending";
+      } else if (newPayout >= targetPayout) {
+        payoutStatus = "paid";
+      } else {
+        payoutStatus = "unfunded";
+      }
+      */
+
+      // =========================================================
+      // TESTING / REUSABLE CALCULATION - OPTION 2
+      // Uses payout.utils.ts, which Jest tests independently.
+      // Keep this block enabled OR use Option 1 above, not both.
+      // =========================================================
+
+      const payoutCalculation = calculatePayout(
+        views,
+        campaign.milestones,
+        submission.payout,
+        remainingBudget
+      );
+
+      const {
+        targetPayout,
+        additionalPayout,
+        newPayout,
+        payoutStatus,
+      } = payoutCalculation;
+
+      // =========================================================
+      // API LOGIC - BUDGET UPDATE
+      // Keep this section enabled for BOTH options.
+      // =========================================================
+
       if (additionalPayout > 0) {
         const budgetUpdate = await Campaign.updateOne(
           {
@@ -88,7 +131,6 @@ export async function updateSubmissionViews({
         );
 
         if (budgetUpdate.modifiedCount !== 1) {
-          // Abort the transaction rather than risk exceeding the budget.
           throw new ApiError(
             409,
             "Campaign budget changed. Please retry the request."
@@ -96,19 +138,22 @@ export async function updateSubmissionViews({
         }
       }
 
+      // =========================================================
+      // API LOGIC - SAVE SUBMISSION
+      // Keep this section enabled for BOTH options.
+      // =========================================================
+
       submission.views = views;
       submission.payout = newPayout;
+      submission.payoutStatus = payoutStatus;
       submission.lastUpdatedAt = new Date();
 
-      if (targetPayout === 0) {
-        submission.payoutStatus = "pending";
-      } else if (newPayout >= targetPayout) {
-        submission.payoutStatus = "paid";
-      } else {
-        submission.payoutStatus = "unfunded";
-      }
-
       await submission.save({ session });
+
+      // =========================================================
+      // API RESPONSE DATA
+      // Keep this section enabled for BOTH options.
+      // =========================================================
 
       result = {
         submissionId: String(submission._id),
