@@ -11,6 +11,8 @@ type Milestone = {
   payout: number;
 };
 
+type CampaignStatus = "live" | "paused" | "completed";
+
 type Campaign = {
   _id?: string;
   id?: string;
@@ -20,7 +22,7 @@ type Campaign = {
   spentBudget: number;
   remainingBudget: number;
   milestones: Milestone[];
-  status: "live" | "paused" | "completed";
+  status: CampaignStatus;
   createdAt?: string;
 };
 
@@ -50,6 +52,10 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
+function getCampaignId(campaign: Campaign) {
+  return campaign._id ?? campaign.id ?? "";
+}
+
 export default function BrandDashboard() {
   const router = useRouter();
 
@@ -59,9 +65,11 @@ export default function BrandDashboard() {
     useState<"Instagram" | "YouTube">("Instagram");
   const [totalBudget, setTotalBudget] = useState("10000");
   const [milestones, setMilestones] =
-    useState<Milestone[]>(initialMilestones);
+    useState<Milestone[]>(initialMilestones.map((m) => ({ ...m })));
+
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [updatingCampaignId, setUpdatingCampaignId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -122,8 +130,7 @@ export default function BrandDashboard() {
     setMilestones((current) => [
       ...current,
       {
-        views:
-          (current[current.length - 1]?.views ?? 0) + 10000,
+        views: (current[current.length - 1]?.views ?? 0) + 10000,
         payout: current[current.length - 1]?.payout ?? 0,
       },
     ]);
@@ -159,13 +166,17 @@ export default function BrandDashboard() {
           m.payout < 0
       )
     ) {
-      setError("Enter valid positive view thresholds and non-negative payouts.");
+      setError(
+        "Enter valid positive view thresholds and non-negative payouts."
+      );
       return;
     }
 
     for (let i = 0; i < milestones.length; i++) {
       if (milestones[i].payout > budget) {
-        setError("A milestone payout cannot exceed the campaign budget.");
+        setError(
+          "A milestone payout cannot exceed the campaign budget."
+        );
         return;
       }
 
@@ -228,6 +239,73 @@ export default function BrandDashboard() {
       );
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function handleCampaignStatusChange(
+    campaign: Campaign,
+    status: CampaignStatus
+  ) {
+    const campaignId = getCampaignId(campaign);
+
+    if (!campaignId) {
+      setError("Unable to identify this campaign.");
+      return;
+    }
+
+    if (campaign.status === "completed") {
+      setError("Completed campaigns cannot be reopened or modified.");
+      return;
+    }
+
+    if (
+      status === "completed" &&
+      !window.confirm(
+        `Complete "${campaign.name}"? This action cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    const token = getAuthToken();
+
+    if (!token) {
+      router.replace("/login");
+      return;
+    }
+
+    setError("");
+    setNotice("");
+    setUpdatingCampaignId(campaignId);
+
+    try {
+      const result = await apiRequest<{
+        success: boolean;
+        message: string;
+        campaign: Campaign;
+      }>(`/api/campaigns/${campaignId}/status`, {
+        method: "PATCH",
+        token,
+        body: JSON.stringify({ status }),
+      });
+
+      setCampaigns((current) =>
+        current.map((item) =>
+          getCampaignId(item) === campaignId
+            ? { ...item, ...result.campaign }
+            : item
+        )
+      );
+
+      setNotice(result.message || `Campaign ${status} successfully.`);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to update campaign status."
+      );
+    } finally {
+      setUpdatingCampaignId("");
     }
   }
 
@@ -314,11 +392,29 @@ export default function BrandDashboard() {
           ))}
         </section>
 
+        {error && (
+          <p
+            role="alert"
+            className="mt-6 rounded-lg border border-red-900 bg-red-950 p-3 text-sm text-red-200"
+          >
+            {error}
+          </p>
+        )}
+
+        {notice && (
+          <p
+            role="status"
+            className="mt-3 rounded-lg border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200"
+          >
+            {notice}
+          </p>
+        )}
+
         <section className="mt-10 grid items-start gap-8 lg:grid-cols-[1.1fr_0.9fr]">
           <div>
             <h2 className="text-xl font-semibold">Your campaigns</h2>
             <p className="mt-1 text-sm text-slate-400">
-              Campaign spending and milestone configuration.
+              Manage campaign status, spending, and milestones.
             </p>
 
             {campaigns.length === 0 ? (
@@ -331,6 +427,7 @@ export default function BrandDashboard() {
             ) : (
               <div className="mt-5 space-y-4">
                 {campaigns.map((campaign) => {
+                  const campaignId = getCampaignId(campaign);
                   const budget = campaign.totalBudget;
                   const spent = campaign.spentBudget;
                   const remaining =
@@ -339,10 +436,12 @@ export default function BrandDashboard() {
                     budget > 0
                       ? Math.min(100, (spent / budget) * 100)
                       : 0;
+                  const isUpdating =
+                    updatingCampaignId === campaignId;
 
                   return (
                     <article
-                      key={campaign._id ?? campaign.id}
+                      key={campaignId}
                       className="rounded-xl border border-slate-800 bg-slate-900 p-5"
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -351,12 +450,78 @@ export default function BrandDashboard() {
                             {campaign.name}
                           </h3>
                           <p className="mt-1 text-sm text-slate-400">
-                            {campaign.platform} · {campaign.milestones.length} milestones
+                            {campaign.platform} · {campaign.milestones.length}{" "}
+                            milestones
                           </p>
                         </div>
-                        <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium capitalize text-emerald-300">
+
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-medium capitalize ${
+                            campaign.status === "live"
+                              ? "bg-emerald-500/10 text-emerald-300"
+                              : campaign.status === "paused"
+                                ? "bg-amber-500/10 text-amber-300"
+                                : "bg-slate-700 text-slate-300"
+                          }`}
+                        >
                           {campaign.status}
                         </span>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {campaign.status === "live" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCampaignStatusChange(
+                                campaign,
+                                "paused"
+                              )
+                            }
+                            disabled={isUpdating}
+                            className="rounded-lg border border-amber-700 px-3 py-2 text-sm font-medium text-amber-300 hover:bg-amber-950 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isUpdating ? "Updating..." : "Pause campaign"}
+                          </button>
+                        )}
+
+                        {campaign.status === "paused" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCampaignStatusChange(
+                                campaign,
+                                "live"
+                              )
+                            }
+                            disabled={isUpdating}
+                            className="rounded-lg border border-emerald-700 px-3 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isUpdating ? "Updating..." : "Resume campaign"}
+                          </button>
+                        )}
+
+                        {campaign.status !== "completed" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCampaignStatusChange(
+                                campaign,
+                                "completed"
+                              )
+                            }
+                            disabled={isUpdating}
+                            className="rounded-lg border border-red-800 px-3 py-2 text-sm font-medium text-red-300 hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isUpdating ? "Updating..." : "Complete campaign"}
+                          </button>
+                        )}
+
+                        {campaign.status === "completed" && (
+                          <p className="py-2 text-sm text-slate-400">
+                            This campaign is complete and cannot be reopened.
+                          </p>
+                        )}
                       </div>
 
                       <div className="mt-5 grid grid-cols-2 gap-4">
@@ -384,6 +549,7 @@ export default function BrandDashboard() {
                           style={{ width: `${percentage}%` }}
                         />
                       </div>
+
                       <p className="mt-2 text-xs text-slate-400">
                         {formatCurrency(spent)} spent ·{" "}
                         {percentage.toFixed(1)}% of budget
@@ -420,9 +586,15 @@ export default function BrandDashboard() {
               Set your budget and define payout milestones.
             </p>
 
-            <form onSubmit={handleCreateCampaign} className="mt-6 space-y-5">
+            <form
+              onSubmit={handleCreateCampaign}
+              className="mt-6 space-y-5"
+            >
               <div>
-                <label htmlFor="campaign-name" className="mb-2 block text-sm font-medium">
+                <label
+                  htmlFor="campaign-name"
+                  className="mb-2 block text-sm font-medium"
+                >
                   Campaign name
                 </label>
                 <input
@@ -438,14 +610,19 @@ export default function BrandDashboard() {
               </div>
 
               <div>
-                <label htmlFor="platform" className="mb-2 block text-sm font-medium">
+                <label
+                  htmlFor="platform"
+                  className="mb-2 block text-sm font-medium"
+                >
                   Platform
                 </label>
                 <select
                   id="platform"
                   value={platform}
                   onChange={(event) =>
-                    setPlatform(event.target.value as "Instagram" | "YouTube")
+                    setPlatform(
+                      event.target.value as "Instagram" | "YouTube"
+                    )
                   }
                   className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 outline-none focus:border-violet-500"
                 >
@@ -455,7 +632,10 @@ export default function BrandDashboard() {
               </div>
 
               <div>
-                <label htmlFor="budget" className="mb-2 block text-sm font-medium">
+                <label
+                  htmlFor="budget"
+                  className="mb-2 block text-sm font-medium"
+                >
                   Total budget (INR)
                 </label>
                 <input
@@ -525,11 +705,16 @@ export default function BrandDashboard() {
                             required
                             value={milestone.views}
                             onChange={(event) =>
-                              updateMilestone(index, "views", event.target.value)
+                              updateMilestone(
+                                index,
+                                "views",
+                                event.target.value
+                              )
                             }
                             className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-sm outline-none focus:border-violet-500"
                           />
                         </div>
+
                         <div>
                           <label
                             htmlFor={`payout-${index}`}
@@ -545,7 +730,11 @@ export default function BrandDashboard() {
                             required
                             value={milestone.payout}
                             onChange={(event) =>
-                              updateMilestone(index, "payout", event.target.value)
+                              updateMilestone(
+                                index,
+                                "payout",
+                                event.target.value
+                              )
                             }
                             className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-sm outline-none focus:border-violet-500"
                           />
@@ -555,18 +744,6 @@ export default function BrandDashboard() {
                   ))}
                 </div>
               </div>
-
-              {error && (
-                <p role="alert" className="rounded-lg bg-red-950 p-3 text-sm text-red-300">
-                  {error}
-                </p>
-              )}
-
-              {notice && (
-                <p role="status" className="rounded-lg bg-emerald-950 p-3 text-sm text-emerald-300">
-                  {notice}
-                </p>
-              )}
 
               <button
                 type="submit"

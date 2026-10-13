@@ -148,3 +148,124 @@ export async function getMyCampaigns(
     next(error);
   }
 }
+
+const updateCampaignStatusSchema = z.object({
+  status: z.enum(["live", "paused", "completed"]),
+});
+
+export async function updateCampaignStatus(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const campaignId = req.params.id;
+
+    if (
+      typeof campaignId !== "string" ||
+      !Types.ObjectId.isValid(campaignId)
+    ) {
+      throw new ApiError(400, "Invalid campaign ID");
+    }
+
+    const parsed = updateCampaignStatusSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      throw new ApiError(400, parsed.error.issues[0].message);
+    }
+
+    const requestedStatus = parsed.data.status;
+    const brandId = authReq.user!.id;
+
+    // Only the brand that owns this campaign can change its status.
+    const campaign = await Campaign.findOne({
+      _id: campaignId,
+      brandId,
+    });
+
+    if (!campaign) {
+      throw new ApiError(404, "Campaign not found");
+    }
+
+    // Completed campaigns are terminal and cannot be reopened.
+    if (campaign.status === "completed") {
+      throw new ApiError(
+        400,
+        "Completed campaigns cannot be reopened"
+      );
+    }
+
+    // A request to set the existing status is harmless.
+    if (campaign.status === requestedStatus) {
+      res.status(200).json({
+        success: true,
+        message: `Campaign is already ${requestedStatus}`,
+        campaign: {
+          id: campaign._id,
+          name: campaign.name,
+          status: campaign.status,
+          totalBudget: campaign.totalBudget,
+          spentBudget: campaign.spentBudget,
+          remainingBudget:
+            campaign.totalBudget - campaign.spentBudget,
+        },
+      });
+      return;
+    }
+
+    // Enforce the allowed lifecycle transitions.
+    const allowedTransitions: Record<string, string[]> = {
+      live: ["paused", "completed"],
+      paused: ["live", "completed"],
+      completed: [],
+    };
+
+    if (!allowedTransitions[campaign.status]?.includes(requestedStatus)) {
+      throw new ApiError(
+        400,
+        `Cannot change campaign status from ${campaign.status} to ${requestedStatus}`
+      );
+    }
+
+    // Include the previous status in the update filter to protect
+    // against a concurrent status change.
+    const updatedCampaign = await Campaign.findOneAndUpdate(
+      {
+        _id: campaignId,
+        brandId,
+        status: campaign.status,
+      },
+      {
+        $set: { status: requestedStatus },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!updatedCampaign) {
+      throw new ApiError(
+        409,
+        "Campaign status changed concurrently. Please refresh and retry."
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Campaign ${requestedStatus} successfully`,
+      campaign: {
+        id: updatedCampaign._id,
+        name: updatedCampaign.name,
+        status: updatedCampaign.status,
+        totalBudget: updatedCampaign.totalBudget,
+        spentBudget: updatedCampaign.spentBudget,
+        remainingBudget:
+          updatedCampaign.totalBudget - updatedCampaign.spentBudget,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}

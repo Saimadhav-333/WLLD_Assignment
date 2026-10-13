@@ -4,6 +4,7 @@ import {
   createCampaign,
   getLiveCampaigns,
   getMyCampaigns,
+  updateCampaignStatus,
 } from "../controllers/campaign.controller";
 
 import {
@@ -32,6 +33,13 @@ router.post(
   authenticate,
   authorize("brand"),
   createCampaign
+);
+
+router.patch(
+  "/:id/status",
+  authenticate,
+  authorize("brand"),
+  updateCampaignStatus
 );
 
 export default router;
