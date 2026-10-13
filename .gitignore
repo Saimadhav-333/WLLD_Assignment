@@ -8,6 +8,12 @@ frontend/node_modules/
 .env
 .env.*
 !.env.example
+!.env.local.example
+
+# Build output
+backend/dist/
+frontend/.next/
+frontend/out/
 
 # Build output
 dist/
