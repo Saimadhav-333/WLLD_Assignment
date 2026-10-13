@@ -4,6 +4,8 @@ import authRoutes from "./routes/auth.routes";
 import { errorHandler } from "./middleware/error.middleware";
 import { authenticate } from "./middleware/auth.middleware";
 import { AuthenticatedRequest } from "./middleware/auth.middleware";
+import campaignRoutes from "./routes/campaign.routes";
+import submissionRoutes from "./routes/submission.routes";
 
 const app = express();
 
@@ -24,6 +26,8 @@ app.get("/api/health", (_req, res) => {
 
 
 app.use("/api/auth", authRoutes);
+app.use("/api/campaigns", campaignRoutes);
+app.use("/api/submissions", submissionRoutes);
 
 app.get("/api/auth/me", authenticate, (req, res) => {
   const authReq = req as AuthenticatedRequest;

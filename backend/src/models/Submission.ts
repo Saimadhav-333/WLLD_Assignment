@@ -7,7 +7,7 @@ export interface ISubmission extends Document {
   postUrl: string;
   views: number;
   payout: number;
-  payoutStatus: "paid" | "unfunded";
+  payoutStatus: "paid" | "unfunded" | "pending";
   lastUpdatedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -74,8 +74,8 @@ const submissionSchema = new Schema<ISubmission>(
 
     payoutStatus: {
       type: String,
-      enum: ["paid", "unfunded"],
-      default: "paid",
+      enum: ["paid", "unfunded","pending"],
+      default: "pending",
       required: true,
     },
 
